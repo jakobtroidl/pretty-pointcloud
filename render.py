@@ -1,93 +1,100 @@
 import bpy
 import numpy as np
-import random
-import os
+from time import time
+from mathutils import Vector
 
-# Generate random colors for each point in the point cloud
-def random_color():
-    return (random.random(), random.random(), random.random(), 1.0)
 
-# Function to create material for each point with a random color
-def create_random_material():
-    mat = bpy.data.materials.new(name="RandomColorMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    color = random_color()
-    bsdf.inputs['Base Color'].default_value = color
-    return mat
+# Clear existing mesh data
+def clear_scene():
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
 
-# Function to create a point cloud as a collection of spheres
-def create_point_cloud(points, point_size=0.05):
-    # Create a new collection for the point cloud
-    collection = bpy.data.collections.new("PointCloud")
-    bpy.context.scene.collection.children.link(collection)
+# Create a UV Sphere at a given location with a specific radius
+def create_sphere(location, radius=0.1):
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=location, segments=16, ring_count=8)
 
-    # Create a sphere for each point
-    for idx, point in enumerate(points):
-        # Create a sphere mesh
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=point_size, location=point)
-        sphere = bpy.context.object
-
-        # Assign a random color material to the sphere
-        mat = create_random_material()
-        if sphere.data.materials:
-            sphere.data.materials[0] = mat
-        else:
-            sphere.data.materials.append(mat)
-
-        # Move the sphere into the point cloud collection
-        bpy.ops.collection.objects_remove_all()
-        collection.objects.link(sphere)
-
-# Set up lighting and shadows
-def setup_lighting():
-    # Create a sun lamp
-    bpy.ops.object.light_add(type='SUN', radius=1, location=(10, 10, 10))
-    sun = bpy.context.object
-    sun.data.energy = 5
-    sun.data.use_shadow = True
-
-    # Optionally, create additional lighting for better shadows
-    bpy.ops.object.light_add(type='AREA', location=(-10, -10, 10))
-    area_light = bpy.context.object
-    area_light.data.size = 5
-    area_light.data.energy = 1000
-    area_light.data.use_shadow = True
-
-# Set up the camera
-def setup_camera():
-    # Create a camera
-    bpy.ops.object.camera_add(location=(5, -5, 5), rotation=(1.1, 0, 0.7))
+# Add a camera to the scene
+def setup_camera(location=(0, -10, 5), rotation=(1.1, 0, 1.57)):
+    bpy.ops.object.camera_add(location=location, rotation=rotation)
     camera = bpy.context.object
     bpy.context.scene.camera = camera
 
+# Add a light source to the scene
+def setup_light(location=(5, -5, 10), energy=1000):
+    bpy.ops.object.light_add(type='POINT', location=location)
+    light = bpy.context.object
+    light.data.energy = energy
+
+# Set up rendering parameters
+def setup_render(filepath='rendered_image.png', resolution=(1920, 1080)):
+    scene = bpy.context.scene
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.filepath = filepath
+    scene.render.resolution_x = resolution[0]
+    scene.render.resolution_y = resolution[1]
+    scene.render.film_transparent = True
+
+# Main function to generate spheres
+def generate_spheres(points, radius=0.1):
+    t = time()
+    C = bpy.context
+
+    scale = 25
+
+    # Open textfile to numpy array and scale
+    pointcloudfilepath = './data/point_data.txt'
+    with open( pointcloudfilepath ) as fh:
+        data = np.loadtxt( fh ) * scale
+
+    print( f'vertcount = {len(data)}')
+
+    # Create and arrange mesh data
+    verts = [ Vector( data[i,:3] ) for i in range(data.shape[0]) ]
+    m     = bpy.data.meshes.new('pc')
+    m.from_pydata(verts, [], [])
+
+    # Create mesh object and link to scene collection
+    o = bpy.data.objects.new( 'pc', m )
+    C.scene.collection.objects.link( o )
+
+    # Add minimal icosphere
+    bpy.ops.mesh.primitive_ico_sphere_add( subdivisions = 1, radius = 0.05 )
+    isobj = bpy.data.objects[ C.object.name ]
+
+    # Set instancing props
+    for ob in [ isobj, o ]:
+        ob.instance_type               = 'VERTS'
+        ob.show_instancer_for_viewport = False
+        ob.show_instancer_for_render   = False
+
+    # Set instance parenting (parent icosphere to verts)
+    o.select_set(True)
+    C.view_layer.objects.active = o
+
+    bpy.ops.object.parent_set( type = 'VERTEX', keep_transform = True )
+
+    print( f'Total time = {time() - t} seconds' )
+
+
+# Example of 4000 random points in N,3 format
+# Replace this with your actual NumPy array
+N = 1000
+points = np.random.uniform(-5, 5, (N, 3))
+
+# Call the function to generate spheres
+generate_spheres(points)
+
+# Set up the camera and light
+setup_camera(location=(0, -20, 10), rotation=(1.1, 0, 1.57))  # Adjust camera position as needed
+setup_light(location=(10, -10, 20), energy=1200)  # Adjust light source position and energy as needed
+
+
+# reduce number of samples
+bpy.context.scene.cycles.samples = 16
+
+# Set up render settings
+setup_render(filepath='./rendered_image.png', resolution=(400, 400))
+
 # Render the scene
-def render_scene(output_path):
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.scene.cycles.samples = 128
-    bpy.context.scene.render.filepath = output_path
-    bpy.ops.render.render(write_still=True)
-
-print("Rendering point cloud...")
-print("pwd: ", os.getcwd())
-
-path = "./data/example.npy"
-
-# Example point cloud data (replace this with your numpy array)
-point_cloud_data = np.load(path)
-
-# Convert numpy array to list of tuples for Blender
-points = [tuple(point) for point in point_cloud_data]
-
-# Create the point cloud
-create_point_cloud(points)
-
-# Set up the lighting, camera, and render the scene
-setup_lighting()
-setup_camera()
-
-# Render and save the image
-output_file_path = "/Users/jakobtroidl/Desktop/point_cloud_render.png"  # Change to your preferred path
-render_scene(output_file_path)
-
-print(f"Render saved to {output_file_path}")
+bpy.ops.render.render(write_still=True)
